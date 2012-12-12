@@ -43,12 +43,14 @@ class VolumeAPI(cinder.openstack.common.rpc.proxy.RpcProxy):
             default_version=self.BASE_RPC_API_VERSION)
 
     def create_volume(self, ctxt, volume, host,
-                      snapshot_id=None, image_id=None):
+                      snapshot_id=None, image_id=None,
+                      source_volid=None):
         self.cast(ctxt,
                   self.make_msg('create_volume',
                                 volume_id=volume['id'],
                                 snapshot_id=snapshot_id,
-                                image_id=image_id),
+                                image_id=image_id,
+                                source_volid=source_volid),
                   topic=rpc.queue_get_for(ctxt,
                                           self.topic,
                                           host))
