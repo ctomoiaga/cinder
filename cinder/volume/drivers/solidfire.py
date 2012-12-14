@@ -26,6 +26,7 @@ import httplib
 import json
 import random
 import socket
+import time
 import string
 import uuid
 
@@ -219,6 +220,16 @@ class SolidFire(SanISCSIDriver):
         params['accountID'] = sfaccount['accountID']
         data = self._issue_api_request('CreateVolume', params)
 
+        if 'error' in data and 'xDBVersionMismatch' in data['error']['name']:
+            retry_count = 5
+            while ('error' in data and 'xDBVersionMismatch'
+                   in data['error']['name'] and retry_count > 0):
+                LOG.warning(_('Detected xDBVersionMismatch, retry %s of 5') %
+                    (5 - retry_count))
+                time.sleep(1)
+                data = self._issue_api_request('CreateVolume', params)
+                retry_count -= 1
+
         if 'result' not in data or 'volumeID' not in data['result']:
             raise exception.SolidFireAPIDataException(data=data)
 
@@ -326,17 +337,30 @@ class SolidFire(SanISCSIDriver):
                 found_count += 1
                 volid = v['volumeID']
 
-        if found_count == 0:
-            raise exception.VolumeNotFound(volume_id=volume['id'])
-
         if found_count > 1:
             LOG.debug(_("Deleting volumeID: %s"), volid)
             raise exception.DuplicateSfVolumeNames(vol_name=volume['id'])
 
-        params = {'volumeID': volid}
-        data = self._issue_api_request('DeleteVolume', params)
-        if 'result' not in data:
-            raise exception.SolidFireAPIDataException(data=data)
+        elif found_count == 1:
+            params = {'volumeID': volid}
+            data = self._issue_api_request('DeleteVolume', params)
+            if ('error' in data and
+                'xDBVersionMismatch' in data['error']['name']):
+                retry_count = 5
+                while ('error' in data and 'xDBVersionMismatch'
+                       in data['error']['name'] and retry_count > 0):
+                    LOG.warning(_('Detected xDBVersionMismatch, '
+                                  'retry %s of 5') %
+                                  (5 - retry_count))
+                    time.sleep(1)
+                    data = self._issue_api_request('DeleteVolume', params)
+                    retry_count -= 1
+
+            if 'result' not in data:
+                raise exception.SolidFireAPIDataException(data=data)
+        else:
+            LOG.error(_("Volume ID %s was not found on "
+                        "the SolidFire Cluster!"), volume['id'])
 
         LOG.debug(_("Leaving SolidFire delete_volume"))
 
