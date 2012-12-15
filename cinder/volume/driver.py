@@ -632,3 +632,49 @@ def _iscsi_location(ip, target, iqn, lun=None):
 
 def _iscsi_authentication(chap, name, password):
     return "%s %s %s" % (chap, name, password)
+
+class LVMThin(VolumeDriver):
+    """Volume driver using LVM thin."""
+    def __init__(self, execute=utils.execute, *args, **kwargs):
+        # NOTE(vish): db is set by Manager
+        self.db = None
+        self.set_execute(execute)
+
+    def set_execute(self, execute):
+        self._execute = execute
+
+    def _try_execute(self, *command, **kwargs):
+        # NOTE(vish): Volume commands can partially fail due to timing, but
+        #             running them a second time on failure will usually
+        #             recover nicely.
+        tries = 0
+        while True:
+            try:
+                self._execute(*command, **kwargs)
+                return True
+            except exception.ProcessExecutionError:
+                tries = tries + 1
+                if tries >= FLAGS.num_shell_tries:
+                    raise
+                LOG.exception(_("Recovering from a failed execute.  "
+                                "Try number %s"), tries)
+                time.sleep(tries ** 2)
+
+    def check_for_setup_error(self):
+        """Returns an error if prerequisites aren't met"""
+
+        #Need to check >= :
+        #  vagrant@quantal64:~$ sudo lvdisplay --version
+        #  LVM version:     2.02.95(2) (2012-03-06)
+        #  Library version: 1.02.74 (2012-03-06)
+        #  Driver version:  4.22.0
+
+        out, err = self._execute('vgs', '--noheadings', '-o', 'name',
+                                 run_as_root=True)
+        volume_groups = out.split()
+        if not FLAGS.volume_group in volume_groups:
+            exception_message = (_("volume group %s doesn't exist")
+                                 % FLAGS.volume_group)
+            raise exception.VolumeBackendAPIException(data=exception_message)
+
+
