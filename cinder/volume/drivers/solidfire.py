@@ -337,6 +337,15 @@ class SolidFire(SanISCSIDriver):
                 found_count += 1
                 volid = v['volumeID']
 
+        if found_count == 0:
+            # Nothing to see here, log an error and move on
+            # NOTE(jdg): We use to raise here, but there are cases
+            # where this might be a cleanup for a failed delete.
+            # Until we get better states we'll just log an error
+            # and return (delete now sets state back to 'deleting')
+            LOG.error(_("Volume %s, not found on SF Cluster."), volid)
+            return
+
         if found_count > 1:
             LOG.debug(_("Deleting volumeID: %s"), volid)
             raise exception.DuplicateSfVolumeNames(vol_name=volume['id'])
