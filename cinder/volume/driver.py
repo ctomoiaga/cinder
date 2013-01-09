@@ -40,6 +40,9 @@ volume_opts = [
     cfg.StrOpt('volume_group',
                default='cinder-volumes',
                help='Name for the VG that will contain exported volumes'),
+    cfg.StrOpt('volume_pool',
+               default=None,
+               help='Name of the LVM Pool'),
     cfg.IntOpt('lvm_mirrors',
                default=0,
                help='If set, create lvms with multiple mirrors. Note that '
@@ -104,9 +107,18 @@ class VolumeDriver(object):
                                  % FLAGS.volume_group)
             raise exception.VolumeBackendAPIException(data=exception_message)
 
+        if FLAGS.volume_pool:
+            #make sure the pool exists and has the corect headings
+            #probably a good idea to do a check of LVM version
+            pass
+
     def _create_volume(self, volume_name, sizestr):
+        vg_name = FLAGS.volume_group
+        if FLAGS.volume_pool:
+            vg_name = ("%s/%s" % (FLAGS.volume_gropu, FLAGS.volume_pool))
+
         cmd = ['lvcreate', '-L', sizestr, '-n', volume_name,
-               FLAGS.volume_group]
+               vg_name]
         if FLAGS.lvm_mirrors:
             cmd += ['-m', FLAGS.lvm_mirrors, '--nosync']
             terras = int(sizestr[:-1]) / 1024.0
@@ -147,6 +159,10 @@ class VolumeDriver(object):
         """Deletes a logical volume."""
         # zero out old volumes to prevent data leaking between users
         # TODO(ja): reclaiming space should be done lazy and low priority
+        vg_name = FLAGS.volume_group
+        if FLAGS.volume_pool:
+            vg_name = ("%s/%s" % (FLAGS.volume_gropu, FLAGS.volume_pool))
+
         dev_path = self.local_path(volume)
         if FLAGS.secure_delete and os.path.exists(dev_path):
             LOG.info(_("Performing secure delete on volume: %s")
@@ -154,7 +170,7 @@ class VolumeDriver(object):
             self._copy_volume('/dev/zero', dev_path, size_in_g)
 
         self._try_execute('lvremove', '-f', "%s/%s" %
-                          (FLAGS.volume_group,
+                          (vg_name,
                            self._escape_snapshot(volume['name'])),
                           run_as_root=True)
 
@@ -221,11 +237,22 @@ class VolumeDriver(object):
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
-        orig_lv_name = "%s/%s" % (FLAGS.volume_group, snapshot['volume_name'])
-        self._try_execute('lvcreate', '-L',
-                          self._sizestr(snapshot['volume_size']),
-                          '--name', self._escape_snapshot(snapshot['name']),
-                          '--snapshot', orig_lv_name, run_as_root=True)
+        if FLAGS.volume_pool:
+            vg_name = ("%s/%s" % (FLAGS.volume_gropu, FLAGS.volume_pool))
+            self._try_execute('lvcreate', '-s', '-n',
+                              self._escape_snapshot(snapshot['name']),
+                              vg_name, run_as_root=True)
+        else:
+            orig_lv_name = "%s/%s" % (FLAGS.volume_group,
+                                      snapshot['volume_name'])
+            self._try_execute('lvcreate',
+                              '-L',
+                              self._sizestr(snapshot['volume_size']),
+                              '--name',
+                              self._escape_snapshot(snapshot['name']),
+                              '--snapshot',
+                              orig_lv_name,
+                              run_as_root=True)
 
     def delete_snapshot(self, snapshot):
         """Deletes a snapshot."""
