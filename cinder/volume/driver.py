@@ -17,6 +17,28 @@
 #    under the License.
 """
 Drivers for volumes.
+Experimental LVM thin
+    Uses a lvm thin pool, this is handy because we don't have
+    to muck with dev mapper directly, and you can extend this
+    pool dynamically if needed.  So far auto-extend doesn't seem
+    to work so we'll skip it for now and just allocate the entire
+    stack VG to the pool right off the bat.  End users can of course
+    choose to do thing however they like here.
+
+here's the todo list:
+    1. Set the use_thin_provisioning flag defautl to False and add to confs
+
+    2. Set the volume_pool flag back to None and add to confs
+
+    3. Rework clone and create from snapshot fro thin...
+        We'll just use an LVM snapshot since we don't have the
+        perf hit any longer
+
+    4. Fix up the setup checks to do something reasonable
+
+    5. Need to move this into the new LVM driver refactor beat me into
+       the queue
+
 
 """
 
@@ -33,7 +55,6 @@ from cinder.openstack.common import log as logging
 from cinder import utils
 from cinder.volume import iscsi
 
-
 LOG = logging.getLogger(__name__)
 
 volume_opts = [
@@ -41,8 +62,11 @@ volume_opts = [
                default='cinder-volumes',
                help='Name for the VG that will contain exported volumes'),
     cfg.StrOpt('volume_pool',
-               default=None,
-               help='Name of the LVM Pool'),
+               default='stack-pool',
+               help='Name of the LVM thin provisioning pool'),
+    cfg.StrOpt('use_thin_provisioning',
+               default=True,
+               help='Whether to use LVM thin provisioning or not'),
     cfg.IntOpt('lvm_mirrors',
                default=0,
                help='If set, create lvms with multiple mirrors. Note that '
@@ -113,13 +137,13 @@ class VolumeDriver(object):
             pass
 
     def _create_volume(self, volume_name, sizestr):
-        vg_name = FLAGS.volume_group
-        if FLAGS.volume_pool:
-            vg_name = ("%s/%s" % (FLAGS.volume_gropu, FLAGS.volume_pool))
-
-        cmd = ['lvcreate', '-L', sizestr, '-n', volume_name,
-               vg_name]
-        if FLAGS.lvm_mirrors:
+        cmd = ['lvcreate', '-L', sizestr,
+               '-n', volume_name, FLAGS.volume_group]
+        if FLAGS.use_thin_provisioning:
+            vg_name = ("%s/%s" % (FLAGS.volume_group, FLAGS.volume_pool))
+            cmd = ['lvcreate', '-T', '-V', sizestr, '-n', volume_name, vg_name]
+        elif FLAGS.lvm_mirrors:
+            #TODO(jdg): add thin support for mirrored LVM
             cmd += ['-m', FLAGS.lvm_mirrors, '--nosync']
             terras = int(sizestr[:-1]) / 1024.0
             if terras >= 1.5:
@@ -161,10 +185,13 @@ class VolumeDriver(object):
         # TODO(ja): reclaiming space should be done lazy and low priority
         vg_name = FLAGS.volume_group
         if FLAGS.volume_pool:
-            vg_name = ("%s/%s" % (FLAGS.volume_gropu, FLAGS.volume_pool))
+            vg_name = ("%s/%s" % (FLAGS.volume_group, FLAGS.volume_pool))
 
         dev_path = self.local_path(volume)
-        if FLAGS.secure_delete and os.path.exists(dev_path):
+
+        if (FLAGS.secure_delete
+                and os.path.exists(dev_path)
+                and not FLAGS.use_thin_provisioning):
             LOG.info(_("Performing secure delete on volume: %s")
                      % volume['id'])
             self._copy_volume('/dev/zero', dev_path, size_in_g)
@@ -172,7 +199,7 @@ class VolumeDriver(object):
         self._try_execute('lvremove', '-f', "%s/%s" %
                           (vg_name,
                            self._escape_snapshot(volume['name'])),
-                          run_as_root=True)
+                           run_as_root=True)
 
     def _sizestr(self, size_in_g):
         if int(size_in_g) == 0:
@@ -237,22 +264,21 @@ class VolumeDriver(object):
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
-        if FLAGS.volume_pool:
-            vg_name = ("%s/%s" % (FLAGS.volume_gropu, FLAGS.volume_pool))
-            self._try_execute('lvcreate', '-s', '-n',
-                              self._escape_snapshot(snapshot['name']),
-                              vg_name, run_as_root=True)
+        orig_lv_name = "%s/%s" % (FLAGS.volume_group,
+                                  snapshot['volume_name'])
+
+        cmd = ['lvcreate', '-L', self._sizestr(snapshot['volume_size']),
+               '--name', self._escape_snapshot(snapshot['name']),
+               '--snapshot', orig_lv_name]
+
+        if FLAGS.volume_pool and FLAGS.use_thin_provisioning:
+            vg_name = ("%s/%s" % (FLAGS.volume_group, FLAGS.volume_pool))
+            cmd = ['lvcreate', '-s', orig_lv_name, '-n',
+                   self._escape_snapshot(snapshot['name']), '-T']
         else:
-            orig_lv_name = "%s/%s" % (FLAGS.volume_group,
-                                      snapshot['volume_name'])
-            self._try_execute('lvcreate',
-                              '-L',
-                              self._sizestr(snapshot['volume_size']),
-                              '--name',
-                              self._escape_snapshot(snapshot['name']),
-                              '--snapshot',
-                              orig_lv_name,
-                              run_as_root=True)
+            pass
+
+        self._try_execute(*cmd, run_as_root=True)
 
     def delete_snapshot(self, snapshot):
         """Deletes a snapshot."""
