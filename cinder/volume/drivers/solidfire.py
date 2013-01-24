@@ -30,8 +30,9 @@ from cinder import exception
 from cinder import flags
 from cinder.openstack.common import cfg
 from cinder.openstack.common import log as logging
-from cinder.volume.drivers.san.san import SanISCSIDriver
+from cinder.volume.driver import ISCSIDriver
 from cinder.volume import volume_types
+from cinder.volume import utils as volume_utils
 
 VERSION = 1.1
 LOG = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ FLAGS = flags.FLAGS
 FLAGS.register_opts(sf_opts)
 
 
-class SolidFire(SanISCSIDriver):
+class SolidFire(ISCSIDriver):
     """OpenStack driver to enable SolidFire cluster.
 
     Version history:
@@ -78,6 +79,7 @@ class SolidFire(SanISCSIDriver):
 
     def __init__(self, *args, **kwargs):
             super(SolidFire, self).__init__(*args, **kwargs)
+            volume_utils.check_for_san_setup_error(self.run_local)
 
     def _issue_api_request(self, method_name, params):
         """All API requests to SolidFire device go through this method.

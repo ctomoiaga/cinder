@@ -29,7 +29,8 @@ from cinder import flags
 from cinder.openstack.common import cfg
 from cinder.openstack.common import importutils
 from cinder.openstack.common import log as logging
-from cinder.volume.drivers.san import san
+from cinder.volume import utils as volume_utils
+from cinder.volume.drivers.driver import ISCSIDriver
 
 ibm_xiv_opts = [
     cfg.StrOpt('xiv_proxy',
@@ -43,7 +44,7 @@ FLAGS.register_opts(ibm_xiv_opts)
 LOG = logging.getLogger('cinder.volume.xiv')
 
 
-class XIVDriver(san.SanISCSIDriver):
+class XIVDriver(ISCSIDriver):
     """IBM XIV volume driver."""
 
     def __init__(self, *args, **kwargs):
@@ -57,7 +58,7 @@ class XIVDriver(san.SanISCSIDriver):
                                 "xiv_vol_pool": FLAGS.san_clustername},
                                LOG,
                                exception)
-        san.SanISCSIDriver.__init__(self, *args, **kwargs)
+        volume_utils.check_for_san_setup_error()
 
     def do_setup(self, context):
         """Setup and verify IBM XIV storage connection."""

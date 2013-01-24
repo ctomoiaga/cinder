@@ -433,6 +433,22 @@ class ISCSIDriver(VolumeDriver):
 
         return iscsi_properties, host_device
 
+    def ensure_export(self, context, volume):
+        """Synchronously recreates an export for a logical volume."""
+        pass
+
+    def create_export(self, context, volume):
+        """Exports the volume."""
+        pass
+
+    def remove_export(self, context, volume):
+        """Removes an export for a logical volume."""
+        pass
+
+    def create_cloned_volume(self, volume, src_vref):
+        """Create clone of teh specified volume."""
+        raise NotImplementedError()
+
 
 class FakeISCSIDriver(ISCSIDriver):
     """Logs calls instead of executing."""

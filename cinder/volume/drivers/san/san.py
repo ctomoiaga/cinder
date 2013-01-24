@@ -131,18 +131,18 @@ class SanISCSIDriver(ISCSIDriver):
             LOG.error(_("Error running ssh command: %s") % command)
             raise e
 
-    def ensure_export(self, context, volume):
-        """Synchronously recreates an export for a logical volume."""
-        pass
-
-    def create_export(self, context, volume):
-        """Exports the volume."""
-        pass
-
-    def remove_export(self, context, volume):
-        """Removes an export for a logical volume."""
-        pass
-
+#    def ensure_export(self, context, volume):
+#        """Synchronously recreates an export for a logical volume."""
+#        pass
+#
+#    def create_export(self, context, volume):
+#        """Exports the volume."""
+#        pass
+#
+#    def remove_export(self, context, volume):
+#        """Removes an export for a logical volume."""
+#        pass
+#
     def check_for_setup_error(self):
         """Returns an error if prerequisites aren't met."""
         if not self.run_local:
@@ -154,6 +154,6 @@ class SanISCSIDriver(ISCSIDriver):
         if not FLAGS.san_ip:
             raise exception.InvalidInput(reason=_("san_ip must be set"))
 
-    def create_cloned_volume(self, volume, src_vref):
-        """Create a cloen of the specified volume."""
-        raise NotImplementedError()
+#    def create_cloned_volume(self, volume, src_vref):
+#        """Create a cloen of the specified volume."""
+#        raise NotImplementedError()
