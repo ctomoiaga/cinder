@@ -263,6 +263,14 @@ class InvalidVolumeMetadataSize(Invalid):
     message = _("Invalid metadata size") + ": %(reason)s"
 
 
+class InvalidSnapshotMetadata(Invalid):
+    message = _("Invalid metadata") + ": %(reason)s"
+
+
+class InvalidSnapshotMetadataSize(Invalid):
+    message = _("Invalid metadata size") + ": %(reason)s"
+
+
 class VolumeTypeNotFound(NotFound):
     message = _("Volume type %(volume_type_id)s could not be found.")
 

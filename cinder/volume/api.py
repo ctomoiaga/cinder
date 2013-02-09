@@ -519,6 +519,41 @@ class API(base.Base):
         self.db.snapshot_update(context, snapshot['id'], fields)
 
     @wrap_check_policy
+    def get_snapshot_metadata(self, context, snapshot):
+        """Get all metadata associated with a snapshot."""
+        rv = self.db.snapshot_metadata_get(context, snapshot['id'])
+        return dict(rv.iteritems())
+
+    @wrap_check_policy
+    def delete_snapshot_metadata(self, context, snapshot, key):
+        """Delete the given metadata item from a snapshot."""
+        self.db.volume_metadata_delete(context, snapshot['id'], key)
+
+    @wrap_check_policy
+    def update_snapshot_metadata(self, context,
+                                 snapshot, metadata,
+                                 delete=False):
+        """Updates or creates snapshot metadata.
+
+        If delete is True, metadata items that are not specified in the
+        `metadata` argument will be deleted.
+
+        """
+        orig_meta = self.get_snapshot_metadata(context, snapshot)
+        if delete:
+            _metadata = metadata
+        else:
+            _metadata = orig_meta.copy()
+            _metadata.update(metadata)
+
+        self._check_metadata_properties(context, _metadata)
+
+        self.db.volume_metadata_update(context,
+                                       snapshot['id'],
+                                       _metadata, True)
+        return _metadata
+
+    @wrap_check_policy
     def get_volume_metadata(self, context, volume):
         """Get all metadata associated with a volume."""
         rv = self.db.volume_metadata_get(context, volume['id'])

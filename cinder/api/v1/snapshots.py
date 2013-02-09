@@ -197,6 +197,7 @@ class SnapshotsController(wsgi.Controller):
         valid_update_keys = (
             'display_name',
             'display_description',
+            'metadata',
         )
 
         for key in valid_update_keys:
