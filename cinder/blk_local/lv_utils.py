@@ -36,6 +36,7 @@ def get_lsize(name, vg_name=None, suffix='G'):
     out = out.strip()
     return out
 
+
 def get(name, vg_name=None):
     '''Inspects system for LV with the given name.
 
@@ -69,7 +70,7 @@ def get(name, vg_name=None):
     del formatted_output[-1]
     del formatted_output[0]
     del formatted_output[0]
-    return dict(map(None, *[iter(formatted_output)]*2))
+    return dict(map(None, *[iter(formatted_output)] * 2))
 
 
 def create(name, size, vg_name, mirror_count=0, type='default'):
@@ -109,6 +110,8 @@ def delete(name, vg_name=None):
                                 lv_ref['LV Name'],
                                 run_as_root=True)
 
+
 def revert(snapshot_name, vg_name=None):
     lv_ref = get(snapshot_name, vg_name)
-    (out, err) = putils.execute('lvconvert', '--merge', lv_ref['LV Name'], run_as_root=True)
+    (out, err) = putils.execute('lvconvert', '--merge',
+                                lv_ref['LV Name'], run_as_root=True)
