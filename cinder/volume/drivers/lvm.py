@@ -26,6 +26,7 @@ import re
 
 from oslo.config import cfg
 
+from cinder.brick import lvm as brick
 from cinder import exception
 from cinder import flags
 from cinder.image import image_utils
@@ -66,12 +67,10 @@ FLAGS.register_opts(volume_opts)
 
 class LVMVolumeDriver(driver.VolumeDriver):
     """Executes commands relating to Volumes."""
-
-    VERSION = '1.0'
-
     def __init__(self, *args, **kwargs):
         super(LVMVolumeDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(volume_opts)
+        self.vg = brick.LVM('stack-volumes')
 
     def check_for_setup_error(self):
         """Returns an error if prerequisites aren't met"""
@@ -83,81 +82,28 @@ class LVMVolumeDriver(driver.VolumeDriver):
                                  % self.configuration.volume_group)
             raise exception.VolumeBackendAPIException(data=exception_message)
 
-    def _create_volume(self, volume_name, sizestr):
-        cmd = ['lvcreate', '-L', sizestr, '-n', volume_name,
-               self.configuration.volume_group]
-        if self.configuration.lvm_mirrors:
-            cmd += ['-m', self.configuration.lvm_mirrors, '--nosync']
-            terras = int(sizestr[:-1]) / 1024.0
-            if terras >= 1.5:
-                rsize = int(2 ** math.ceil(math.log(terras) / math.log(2)))
-                # NOTE(vish): Next power of two for region size. See:
-                #             http://red.ht/U2BPOD
-                cmd += ['-R', str(rsize)]
-
-        self._try_execute(*cmd, run_as_root=True)
-
-    def _copy_volume(self, srcstr, deststr, size_in_g, clearing=False):
-        # Use O_DIRECT to avoid thrashing the system buffer cache
-        extra_flags = ['iflag=direct', 'oflag=direct']
-
-        # Check whether O_DIRECT is supported
-        try:
-            self._execute('dd', 'count=0', 'if=%s' % srcstr, 'of=%s' % deststr,
-                          *extra_flags, run_as_root=True)
-        except exception.ProcessExecutionError:
-            extra_flags = []
-
-        # If the volume is being unprovisioned then
-        # request the data is persisted before returning,
-        # so that it's not discarded from the cache.
-        if clearing and not extra_flags:
-            extra_flags.append('conv=fdatasync')
-
-        # Perform the copy
-        self._execute('dd', 'if=%s' % srcstr, 'of=%s' % deststr,
-                      'count=%d' % (size_in_g * 1024),
-                      'bs=%s' % self.configuration.volume_dd_blocksize,
-                      *extra_flags, run_as_root=True)
-
-    def _volume_not_present(self, volume_name):
-        path_name = '%s/%s' % (self.configuration.volume_group, volume_name)
-        try:
-            self._try_execute('lvdisplay', path_name, run_as_root=True)
-        except Exception as e:
-            # If the volume isn't present
-            return True
-        return False
-
-    def _delete_volume(self, volume, size_in_g):
-        """Deletes a logical volume."""
-        # zero out old volumes to prevent data leaking between users
-        # TODO(ja): reclaiming space should be done lazy and low priority
-        dev_path = self.local_path(volume)
-        if os.path.exists(dev_path):
-            self.clear_volume(volume)
-
-        self._try_execute('lvremove', '-f', "%s/%s" %
-                          (self.configuration.volume_group,
-                           self._escape_snapshot(volume['name'])),
-                          run_as_root=True)
-
     def _sizestr(self, size_in_g):
         if int(size_in_g) == 0:
             return '100M'
         return '%sG' % size_in_g
 
-    # Linux LVM reserves name that starts with snapshot, so that
-    # such volume name can't be created. Mangle it.
-    def _escape_snapshot(self, snapshot_name):
-        if not snapshot_name.startswith('snapshot'):
-            return snapshot_name
-        return '_' + snapshot_name
+
+    def _volume_not_present(self, volume_name):
+        if self.vg.get_volume(volume_name) is None:
+            return True
+
+        #path_name = '%s/%s' % (self.vg.vg_name(), volume_name)
+        #try:
+        #    self._try_execute('lvdisplay', path_name, run_as_root=True)
+        #except Exception as e:
+        #    # If the volume isn't present
+        #    return True
+        return False
 
     def create_volume(self, volume):
         """Creates a logical volume. Can optionally return a Dictionary of
         changes to the volume object to be persisted."""
-        self._create_volume(volume['name'], self._sizestr(volume['size']))
+        self.vg.create_volume(volume['name'], self._sizestr(volume['size']))
 
     def create_volume_from_snapshot(self, volume, snapshot):
         """Creates a volume from a snapshot."""
@@ -167,81 +113,23 @@ class LVMVolumeDriver(driver.VolumeDriver):
 
     def delete_volume(self, volume):
         """Deletes a logical volume."""
-        if self._volume_not_present(volume['name']):
-            # If the volume isn't present, then don't attempt to delete
+        if self.vg.get_volume(volume['name']) is None:
             return True
-
-        # TODO(yamahata): lvm can't delete origin volume only without
-        # deleting derived snapshots. Can we do something fancy?
-        out, err = self._execute('lvdisplay', '--noheading',
-                                 '-C', '-o', 'Attr',
-                                 '%s/%s' % (self.configuration.volume_group,
-                                            volume['name']),
-                                 run_as_root=True)
-        # fake_execute returns None resulting unit test error
-        if out:
-            out = out.strip()
-            if (out[0] == 'o') or (out[0] == 'O'):
-                raise exception.VolumeIsBusy(volume_name=volume['name'])
-
-        self._delete_volume(volume, volume['size'])
+        self.vg.delete(volume['name'])
 
     def clear_volume(self, volume):
         """unprovision old volumes to prevent data leaking between users."""
-
-        vol_path = self.local_path(volume)
-        size_in_g = volume.get('size')
-        size_in_m = self.configuration.volume_clear_size
-
-        if not size_in_g:
-            LOG.warning(_("Size for volume: %s not found, "
-                          "skipping secure delete.") % volume['name'])
-            return
-
-        if self.configuration.volume_clear == 'none':
-            return
-
-        LOG.info(_("Performing secure delete on volume: %s") % volume['id'])
-
-        if self.configuration.volume_clear == 'zero':
-            if size_in_m == 0:
-                return self._copy_volume('/dev/zero',
-                                         vol_path, size_in_g,
-                                         clearing=True)
-            else:
-                clear_cmd = ['shred', '-n0', '-z', '-s%dMiB' % size_in_m]
-        elif self.configuration.volume_clear == 'shred':
-            clear_cmd = ['shred', '-n3']
-            if size_in_m:
-                clear_cmd.append('-s%dMiB' % size_in_m)
-        else:
-            LOG.error(_("Error unrecognized volume_clear option: %s"),
-                      self.configuration.volume_clear)
-            return
-
-        clear_cmd.append(vol_path)
-        self._execute(*clear_cmd, run_as_root=True)
+        pass
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
-        orig_lv_name = "%s/%s" % (self.configuration.volume_group,
-                                  snapshot['volume_name'])
-        self._try_execute('lvcreate', '-L',
-                          self._sizestr(snapshot['volume_size']),
-                          '--name', self._escape_snapshot(snapshot['name']),
-                          '--snapshot', orig_lv_name, run_as_root=True)
+        self.vg.create_lv_snapshot('_%s' % snapshot['name'], snapshot['volume_name'])
 
     def delete_snapshot(self, snapshot):
         """Deletes a snapshot."""
-        if self._volume_not_present(self._escape_snapshot(snapshot['name'])):
-            # If the snapshot isn't present, then don't attempt to delete
-            LOG.warning(_("snapshot: %s not found, "
-                          "skipping delete operations") % snapshot['name'])
+        if self.vg.get_volume(snapshot['name']) is None:
             return True
-
-        # TODO(yamahata): zeroing out the whole snapshot triggers COW.
-        # it's quite slow.
-        self._delete_volume(snapshot, snapshot['volume_size'])
+        self.vg_delete('_%s' % snapshot['name'])
 
     def local_path(self, volume):
         # NOTE(vish): stops deprecation warning
@@ -566,7 +454,7 @@ class LVMISCSIDriver(LVMVolumeDriver, driver.ISCSIDriver):
         backend_name = self.configuration.safe_get('volume_backend_name')
         data["volume_backend_name"] = backend_name or 'LVM_iSCSI'
         data["vendor_name"] = 'Open Source'
-        data["driver_version"] = self.VERSION
+        data["driver_version"] = '1.0'
         data["storage_protocol"] = 'iSCSI'
 
         data['total_capacity_gb'] = 0
@@ -600,9 +488,6 @@ class LVMISCSIDriver(LVMVolumeDriver, driver.ISCSIDriver):
 
 class ThinLVMVolumeDriver(LVMISCSIDriver):
     """Subclass for thin provisioned LVM's."""
-
-    VERSION = '1.0'
-
     def __init__(self, *args, **kwargs):
         super(ThinLVMVolumeDriver, self).__init__(*args, **kwargs)
 
@@ -661,28 +546,3 @@ class ThinLVMVolumeDriver(LVMISCSIDriver):
         """Creates a snapshot of a volume."""
         orig_lv_name = "%s/%s" % (FLAGS.volume_group, snapshot['volume_name'])
         self._do_lvm_snapshot(orig_lv_name, snapshot)
-
-    def get_volume_stats(self, refresh=False):
-        """Get volume status.
-        If 'refresh' is True, run update the stats first."""
-        if refresh:
-            self._update_volume_status()
-
-        return self._stats
-
-    def _update_volume_status(self):
-        """Retrieve status info from volume group."""
-
-        LOG.debug(_("Updating volume status"))
-        data = {}
-
-        backend_name = self.configuration.safe_get('volume_backend_name')
-        data["volume_backend_name"] = backend_name or self.__class__.__name__
-        data["vendor_name"] = 'Open Source'
-        data["driver_version"] = self.VERSION
-        data["storage_protocol"] = 'iSCSI'
-        data['reserved_percentage'] = self.configuration.reserved_percentage
-        data['QoS_support'] = False
-        data['total_capacity_gb'] = 'infinite'
-        data['free_capacity_gb'] = 'infinite'
-        self._stats = data
