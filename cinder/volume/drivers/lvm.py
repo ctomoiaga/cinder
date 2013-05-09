@@ -134,9 +134,9 @@ class LVMVolumeDriver(driver.VolumeDriver):
 
     def delete_snapshot(self, snapshot):
         """Deletes a snapshot."""
-        if self.vg.get_volume(snapshot['name']) is None:
+        if self.vg.get_volume(self._escape_snapshot(snapshot['name'])) is None:
             return True
-        self.vg_delete('_%s' % snapshot['name'])
+        self.vg_delete('%s' % self._escape_snapshot(snapshot['name']))
 
     def local_path(self, volume):
         # NOTE(vish): stops deprecation warning
