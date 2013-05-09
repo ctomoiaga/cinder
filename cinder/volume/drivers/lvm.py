@@ -100,6 +100,13 @@ class LVMVolumeDriver(driver.VolumeDriver):
         #    return True
         return False
 
+    # Linux LVM reserves name that starts with snapshot, so that
+    # such volume name can't be created. Mangle it.
+    def _escape_snapshot(self, snapshot_name):
+        if not snapshot_name.startswith('snapshot'):
+            return snapshot_name
+        return '_' + snapshot_name
+
     def create_volume(self, volume):
         """Creates a logical volume. Can optionally return a Dictionary of
         changes to the volume object to be persisted."""
